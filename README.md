@@ -4,7 +4,7 @@
 **Integrantes:**
 - Gabriel (Owner)
 - Raquel Miranda
-- [Adicione os outros nomes aqui]
+- Carlos Henrique
 - [Adicione os outros nomes aqui]
 - [Adicione os outros nomes aqui]
 
