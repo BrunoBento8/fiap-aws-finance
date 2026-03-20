@@ -1,45 +1,42 @@
-import sys
-from awsglue.context import GlueContext
-from pyspark.context import SparkContext
-from pyspark.sql import functions as F
-from pyspark.sql.window import Window
-from awsglue.job import Job
 
-sc = SparkContext()
-glueContext = GlueContext(sc)
-spark = glueContext.spark_session
-job = Job(glueContext)
+# Script de extração para rodar no CloudShell ou local
+import yfinance as yf
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import boto3
+from datetime import datetime
+import os
 
-S3_RAW = "s3://tech-challenge-fase2-raquel-miranda/raw/"
-S3_REFINED = "s3://tech-challenge-fase2-raquel-miranda/refined/"
+TICKER = "PETR4.SA"
+BUCKET = "tech-challenge-fase2-raquel-miranda"  # <- ajuste se necessário
+S3_KEY = f"raw/dt={datetime.today().strftime('%Y-%m-%d')}/dados.parquet"
+LOCAL_FILE = "dados.parquet"
 
-print("Lendo dados da camada RAW...")
-df = spark.read.parquet(S3_RAW)
+def main():
+    print("Baixando dados com yfinance...")
+    df = yf.download(TICKER, period="1mo", interval="1d")
+    df.reset_index(inplace=True)
+    print(f"Linhas baixadas: {len(df)}")
 
-# Limpeza dos nomes de colunas estranhos vindos do yfinance
-for col_name in df.columns:
-    new_name = col_name.replace("('", "").replace("', '", "_").replace("')", "").replace("', '')", "").lower()
-    clean_name = new_name.split("_")[0]
-    df = df.withColumnRenamed(col_name, clean_name)
+    print("Convertendo para parquet localmente...")
+    table = pa.Table.from_pandas(df)
+    pq.write_table(table, LOCAL_FILE)
 
-# Garantir tipos
-if "date" in df.columns:
-    df = df.withColumn("date", F.to_date(F.col("date")))
-if "close" in df.columns:
-    df = df.withColumn("close", F.col("close").cast("double"))
+    print(f"Enviando {LOCAL_FILE} para s3://{BUCKET}/{S3_KEY} ...")
+    s3 = boto3.client('s3')
+    try:
+        s3.upload_file(LOCAL_FILE, BUCKET, S3_KEY)
+        print("Upload concluído.")
+    except Exception as e:
+        print("Erro no upload:", e)
+        raise
 
-# Média móvel de 3 dias no fechamento
-windowSpec = Window.orderBy("date").rowsBetween(-2, 0)
-df = df.withColumn("media_movel_3_dias", F.avg("close").over(windowSpec))
+    # opcional: remover arquivo local
+    try:
+        os.remove(LOCAL_FILE)
+    except:
+        pass
 
-# Timestamp de processamento
-df = df.withColumn("data_processamento", F.current_timestamp())
-
-print("Mostrando as 5 primeiras linhas:")
-df.show(5, truncate=False)
-
-print("Gravando no REFINED em parquet...")
-df.write.mode("overwrite").parquet(S3_REFINED)
-
-print("Job finalizado.")
-job.commit()
+if __name__ == "__main__":
+    main()
