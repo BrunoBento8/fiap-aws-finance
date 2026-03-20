@@ -1,1 +1,0 @@
-# Scripts do Projeto
