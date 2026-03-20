@@ -8,28 +8,171 @@ Este projeto apresenta um pipeline de dados **Serverless na AWS** para extraçã
 * Carlos Henrique Neves Júnior
 * Bruno Bento
 * Victor Hugo
----
-
-### #### Resumo do Projeto
-O pipeline foi desenhado para ser escalável e de baixo custo, utilizando serviços gerenciados da AWS. O foco principal é a transformação de dados brutos em informações prontas para análise (camada Refined), garantindo a integridade matemática dos indicadores calculados.
-
-### #### Arquitetura
-* **Ingestão:** Script Python utilizando a biblioteca `yfinance` rodando no CloudShell, salvando em **Amazon S3 (Camada RAW)** em formato Parquet particionado por data.
-* **Processamento:** Job em **AWS Glue (PySpark)** para limpeza de colunas, conversão de tipos e cálculo de **Média Móvel de 3 dias**, salvando em **Amazon S3 (Camada REFINED)**.
-* **Consumo:** **Amazon Athena** para criação de tabela externa e consultas SQL sobre os dados processados.
-
-### #### Tecnologias Utilizadas
-* **Linguagens:** Python 3.x, PySpark, SQL.
-- **AWS Services:** S3, Glue, Lambda, Athena, IAM, CloudWatch.
-- **Bibliotecas:** `yfinance`, `pandas`, `pyarrow`, `boto3`.
 
 ---
 
-### #### Como Executar
+## Arquitetura
 
-1. **Extração:** Execute o script `scripts/extrair_dados.py` para alimentar a pasta `raw/` no S3.
-2. **ETL:** No AWS Glue Studio, crie um Job Spark e utilize o código contido em `scripts/job_glue_spark.py`.
-3. **Consulta:** No Amazon Athena, execute o DDL contido em `scripts/queries_athena.sql` para criar a base de dados e a tabela.
-4. **Validação:** Rode o comando de validação para comparar a média móvel calculada no Spark com o SQL:
-   ```sql
-   SELECT * FROM fiap_finance.bovespa_detalhado ORDER BY data_pregao DESC LIMIT 20;
+```
+yfinance → S3 RAW (Parquet) → AWS Lambda → AWS Glue (PySpark) → S3 REFINED (Parquet) → Amazon Athena
+```
+
+* **Ingestão:** Script Python (`src/ingestion/extrair_dados.py`) utilizando `yfinance`, rodando no CloudShell ou localmente, salvando em **Amazon S3 (camada RAW)** em formato Parquet particionado por data.
+* **Automação:** Função **AWS Lambda** (`src/lambda/lambda_function.py`) disparada por eventos S3, que inicia automaticamente o Glue Job ao detectar novos arquivos Parquet na camada RAW.
+* **Processamento:** Job **AWS Glue PySpark** (`src/glue/job_spark_etl.py`) para limpeza de colunas, conversão de tipos e cálculo de **Média Móvel de 3 dias**, salvando na camada REFINED.
+* **Consulta:** **Amazon Athena** com tabela externa criada via DDL (`src/sql/athena_table.sql`) sobre os dados processados.
+
+---
+
+## Estrutura do Projeto
+
+```
+fiap-aws-finance/
+├── README.md
+├── requirements.txt
+├── src/
+│   ├── ingestion/
+│   │   └── extrair_dados.py       # Extrai dados da PETR4.SA e envia ao S3 RAW
+│   ├── lambda/
+│   │   └── lambda_function.py     # Lambda: dispara o Glue Job via eventos S3
+│   ├── glue/
+│   │   └── job_spark_etl.py       # ETL PySpark: limpeza + média móvel → S3 REFINED
+│   ├── sql/
+│   │   └── athena_table.sql       # DDL da tabela externa no Athena
+│   └── scraping/
+│       ├── scp_acoes.py           # Scraper de ações (Fundamentus)
+│       └── scp_fii.py             # Scraper de FIIs (Fundamentus)
+├── notebooks/
+│   └── analise.ipynb              # Análise exploratória
+└── data/
+    ├── raw/
+    │   ├── fundamentus_acoes.csv
+    │   └── fundamentus_fii.csv
+    └── processed/
+        ├── clean_acoes.csv
+        └── clean_fii.csv
+```
+
+---
+
+## Tecnologias Utilizadas
+
+* **Linguagens:** Python 3.x, PySpark, SQL
+* **AWS Services:** S3, Glue, Lambda, Athena, IAM, CloudWatch
+* **Bibliotecas:** `yfinance`, `pandas`, `pyarrow`, `boto3`, `requests`, `beautifulsoup4`
+
+---
+
+## Como Executar
+
+### Pré-requisitos
+
+```bash
+pip install -r requirements.txt
+```
+
+Configure as credenciais AWS antes de executar scripts que acessem S3:
+
+```bash
+aws configure
+```
+
+### 1. Ingestão de Dados
+
+Execute localmente ou no AWS CloudShell para extrair dados da PETR4.SA e enviar ao S3:
+
+```bash
+python src/ingestion/extrair_dados.py
+```
+
+### 2. ETL (AWS Glue)
+
+No AWS Glue Studio, crie um Job Spark e utilize o código em `src/glue/job_spark_etl.py`.
+
+O job recebe os argumentos `--source_bucket` e `--source_keys`, que são passados automaticamente pela Lambda.
+
+### 3. Consulta (Amazon Athena)
+
+Execute o DDL em `src/sql/athena_table.sql` no Athena para registrar a tabela externa sobre a camada REFINED:
+
+```sql
+SELECT * FROM fiap_finance.bovespa_refined ORDER BY date DESC LIMIT 20;
+```
+
+### 4. Scraping Fundamentus (opcional)
+
+```bash
+python src/scraping/scp_acoes.py   # → data/raw/fundamentus_acoes.csv
+python src/scraping/scp_fii.py     # → data/raw/fundamentus_fii.csv
+```
+
+---
+
+## Schema de Dados
+
+**RAW** (`src/ingestion/extrair_dados.py`):
+
+| Coluna | Descrição |
+|--------|-----------|
+| `data_pregao` | Data do pregão |
+| `preco_fechamento` | Preço de fechamento |
+| `high_petr4_sa` | Máxima do dia |
+| `low_petr4_sa` | Mínima do dia |
+| `open_petr4_sa` | Abertura |
+| `volume_negociado` | Volume negociado |
+
+**REFINED** (Athena `bovespa_refined`):
+
+| Coluna | Descrição |
+|--------|-----------|
+| `date` | Data do pregão |
+| `close` | Preço de fechamento |
+| `high` | Máxima |
+| `low` | Mínima |
+| `open` | Abertura |
+| `volume` | Volume |
+| `media_movel_3_dias` | Média móvel de 3 dias |
+| `data_processamento` | Timestamp do processamento |
+
+---
+
+## Configuração da Lambda
+
+A Lambda (`src/lambda/lambda_function.py`) automatiza o disparo do Glue Job ao detectar novos arquivos Parquet na camada RAW.
+
+### 1. IAM Role
+
+Crie uma Role com a seguinte policy inline (substitua `ACCOUNT_ID` e `SEU_GLUE_JOB`):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["glue:StartJobRun", "glue:GetJobRun", "glue:GetJob"],
+      "Resource": "arn:aws:glue:us-east-1:ACCOUNT_ID:job/SEU_GLUE_JOB"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": "arn:aws:logs:*:*:*"
+    }
+  ]
+}
+```
+
+### 2. Variável de Ambiente
+
+| Chave | Valor |
+|-------|-------|
+| `GLUE_JOB_NAME` | Nome do Glue Job |
+
+### 3. Trigger S3
+
+1. **S3 → Bucket → Properties → Event notifications → Create event notification**
+2. Configure:
+   - **Event types:** `s3:ObjectCreated:*`
+   - **Prefix:** `raw/`
+   - **Suffix:** `.parquet`
+   - **Destination:** Lambda Function → selecione sua Lambda

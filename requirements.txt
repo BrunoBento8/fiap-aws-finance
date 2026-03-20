@@ -1,0 +1,10 @@
+# Ingestão de dados (extrair_dados.py)
+yfinance
+pandas
+pyarrow
+boto3
+
+# Scrapers Fundamentus (scp_acoes.py, scp_fii.py)
+requests
+beautifulsoup4
+lxml
